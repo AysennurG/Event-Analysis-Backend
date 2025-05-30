@@ -1,23 +1,17 @@
 import os
 import cv2
-from collections import Counter
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import json
 from deepface import DeepFace
-import matplotlib.pyplot as plt
+from sklearn.metrics.pairwise import cosine_similarity
+from collections import Counter
+
+def get_dominant_from_dict(dct):
+    if isinstance(dct, dict) and len(dct) > 0:
+        return max(dct, key=dct.get)
+    return None
 
 def analyze_and_draw_faces(image_folder, output_folder):
-    """
-    Yüzleri analiz eder, işlenmiş resimleri kaydeder ve analiz sonuçlarını döndürür.
-
-    Args:
-        image_folder (str): Yüklenen resimlerin bulunduğu klasör.
-        output_folder (str): İşlenmiş resimlerin kaydedileceği klasör.
-
-    Returns:
-        tuple: Analiz sonuçları ve işlenmiş resimlerin dosya adları.
-    """
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     results = []
     processed_images = []
 
@@ -25,7 +19,7 @@ def analyze_and_draw_faces(image_folder, output_folder):
         os.makedirs(output_folder)
 
     for filename in os.listdir(image_folder):
-        if filename.lower().endswith(('png', 'jpg', 'jpeg')):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             img_path = os.path.join(image_folder, filename)
             print(f"Processing file: {filename}")
 
@@ -34,35 +28,100 @@ def analyze_and_draw_faces(image_folder, output_folder):
                 print(f"Error: Unable to read image {filename}")
                 continue
 
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            try:
+                analyses = DeepFace.analyze(
+                    img_path,
+                    actions=['age', 'gender', 'race', 'emotion'],
+                    enforce_detection=False,
+                    detector_backend='retinaface'
+                )
+                # DeepFace çıktısını JSON'a çevirip tekrar yükle
+                analyses = json.loads(json.dumps(analyses, default=str))
 
-            for (x, y, w, h) in faces:
-                face_img = img[y:y+h, x:x+w]
+                # JSON'dan sonra bile tuple dönebilir, güvenli şekilde düzleştir
+                if isinstance(analyses, tuple):
+                    flat = []
+                    for a in analyses:
+                        if a is None:
+                            continue
+                        if isinstance(a, dict):
+                            flat.append(a)
+                        elif isinstance(a, tuple):
+                            for x in a:
+                                if isinstance(x, dict):
+                                    flat.append(x)
+        # Eğer a tuple değilse, for x in a çalışmaz, hiçbir şey yapma
+                    analyses = flat
+                elif isinstance(analyses, dict):
+                    analyses = [analyses]
+                elif not isinstance(analyses, list):
+                    analyses = []
+            except Exception as e:
+                print(f"Error analyzing faces in {filename}: {e}")
+                analyses = []
 
-                try:
-                    # Yüz analizi ve embedding çıkarma
-                    analysis = DeepFace.analyze(face_img, actions=['age', 'gender', 'race'], enforce_detection=False)
-                    embedding = DeepFace.represent(face_img, model_name='Facenet', enforce_detection=False)
+            if any(isinstance(a, dict) for a in analyses):
+                for analysis in analyses:
+                    if not isinstance(analysis, dict):
+                        continue
+                    region = analysis.get('region') or analysis.get('facial_area')
+                    if not region or not isinstance(region, dict):
+                        continue
+                    x = region.get('x', 0)
+                    y = region.get('y', 0)
+                    w = region.get('w', 0)
+                    h = region.get('h', 0)
+                    if w == 0 or h == 0:
+                        continue
 
-                    if isinstance(embedding, list) and len(embedding) > 0:
-                        embedding = embedding[0]['embedding']
+                    face_img = img[y:y+h, x:x+w]
+                    if face_img.size == 0:
+                        continue
+
+                    try:
+                        embedding = DeepFace.represent(
+                            face_img,
+                            model_name='Facenet',
+                            enforce_detection=False,
+                            detector_backend='retinaface'
+                        )
+                        if isinstance(embedding, list):
+                            if len(embedding) > 0 and isinstance(embedding[0], dict) and 'embedding' in embedding[0]:
+                                embedding = embedding[0]['embedding']
+                            elif len(embedding) > 0 and isinstance(embedding[0], (float, int)):
+                                pass
+                            else:
+                                continue
+                        elif isinstance(embedding, np.ndarray):
+                            embedding = embedding.tolist()
+                        else:
+                            continue
+                    except Exception as e:
+                        print(f"Embedding error in {filename}: {e}")
+                        continue
+
+                    age = analysis.get('age')
+                    gender = analysis.get('dominant_gender') or get_dominant_from_dict(analysis.get('gender', {}))
+                    race = analysis.get('dominant_race') or get_dominant_from_dict(analysis.get('race', {}))
+                    emotion = analysis.get('dominant_emotion') or get_dominant_from_dict(analysis.get('emotion', {}))
+
+                    if age is None or gender is None or race is None:
+                        continue
 
                     results.append({
                         'image': filename,
-                        'age': int(analysis[0]['age']),
-                        'gender': analysis[0]['dominant_gender'],
-                        'race': analysis[0]['dominant_race'],
+                        'age': int(age),
+                        'gender': gender,
+                        'race': race,
+                        'emotion': emotion,
                         'embedding': embedding,
                         'coordinates': (int(x), int(y), int(w), int(h))
                     })
 
-                    # Görüntüye etiket ekleme
-                    label = f"{analysis[0]['dominant_gender']}, {analysis[0]['age']}, {analysis[0]['dominant_race']}"
+                    # Görüntüye etiket ekle
+                    label = f"{gender}, {age}, {race}, {emotion}"
                     cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
                     cv2.putText(img, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                except Exception as e:
-                    print(f"Error analyzing face in {filename}: {e}")
 
             # İşlenmiş resmi kaydet
             output_path = os.path.join(output_folder, f"processed_{filename}")
@@ -72,78 +131,37 @@ def analyze_and_draw_faces(image_folder, output_folder):
 
     return results, processed_images
 
-
-def group_faces_and_generate_report(results, threshold=0.6):
-    """
-    Yüzleri gruplandırır ve bir rapor oluşturur.
-
-    Args:
-        results (list): Yüz analizi sonuçları.
-        threshold (float): Benzerlik eşik değeri.
-
-    Returns:
-        str: Oluşturulan raporun dosya yolu.
-    """
-    if not results:
-        print("No faces detected. Cannot generate report.")
-        return
-
-    embeddings = np.array([result['embedding'] for result in results if isinstance(result['embedding'], list)])
-
-    if len(embeddings) == 0:
-        print("No valid embeddings found. Cannot generate report.")
-        return
-
-    # Benzerlik matrisini hesapla
-    similarity_matrix = cosine_similarity(embeddings)
+def group_faces_and_generate_report(results, threshold=0.8):
+    embeddings = [r['embedding'] for r in results if isinstance(r['embedding'], (list, np.ndarray))]
     grouped_faces = []
     visited = set()
+    if embeddings:
+        similarity_matrix = cosine_similarity(embeddings)
+        for i, result in enumerate(results):
+            if i in visited:
+                continue
+            group = [result]
+            visited.add(i)
+            for j in range(len(results)):
+                if j not in visited and similarity_matrix[i, j] > threshold:
+                    group.append(results[j])
+                    visited.add(j)
+            grouped_faces.append(group)
+        crowd_size = len(grouped_faces)
+    else:
+        crowd_size = 0
 
-    for i, result in enumerate(results):
-        if i in visited:
-            continue
-        group = [result]
-        visited.add(i)
-        for j in range(len(results)):
-            if j not in visited and similarity_matrix[i, j] > (1 - threshold):
-                group.append(results[j])
-                visited.add(j)
-        grouped_faces.append(group)
+    genders = [r['gender'] for r in results]
+    races = [r['race'] for r in results]
+    ages = [r['age'] for r in results]
+    emotions = [r['emotion'] for r in results if r.get('emotion')]
 
-    print(f"Total unique faces: {len(grouped_faces)}")
-
-    # Analiz verilerini toplama
-    genders = [result['gender'] for result in results]
-    races = [result['race'] for result in results]
-    ages = [result['age'] for result in results]
-
-    # Grafik oluşturma
-    plt.figure(figsize=(15, 5))
-
-    plt.subplot(1, 3, 1)
-    gender_counts = Counter(genders)
-    plt.bar(gender_counts.keys(), gender_counts.values(), color='skyblue')
-    plt.title("Gender Distribution")
-    plt.xlabel("Gender")
-    plt.ylabel("Count")
-
-    plt.subplot(1, 3, 2)
-    race_counts = Counter(races)
-    plt.bar(race_counts.keys(), race_counts.values(), color='lightgreen')
-    plt.title("Race Distribution")
-    plt.xlabel("Race")
-    plt.ylabel("Count")
-
-    plt.subplot(1, 3, 3)
-    plt.hist(ages, bins=10, color='salmon', edgecolor='black')
-    plt.title("Age Distribution")
-    plt.xlabel("Age")
-    plt.ylabel("Count")
-
-    # Raporu kaydet
-    graph_path = os.path.join("uploads", "report.png")
-    plt.tight_layout()
-    plt.savefig(graph_path)
-    plt.close()
-
-    return graph_path
+    report = {
+        "crowd_size": crowd_size,
+        "gender_counts": dict(Counter(genders)),
+        "race_counts": dict(Counter(races)),
+        "age_counts": dict(Counter(ages)),
+        "emotion_counts": dict(Counter(emotions)),
+        "ages": ages
+    }
+    return report

@@ -1,13 +1,14 @@
 import psycopg2
+import os
 
 # PostgreSQL bağlantısı
 def connect_to_db():
     try:
         conn = psycopg2.connect(
-            dbname="event_analysis",
-            user="postgres",
-            password="ays123",
-            host="localhost"
+            dbname=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            host=os.getenv("DB_HOST")
         )
         cursor = conn.cursor()
         print("Database connection successful")
