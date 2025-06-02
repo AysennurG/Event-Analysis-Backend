@@ -8,6 +8,7 @@ import psycopg2
 import os
 import shutil
 import traceback
+import json
 from db import connect_to_db
 from face_analysis import analyze_and_draw_faces, group_faces_and_generate_report
 
@@ -18,6 +19,10 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 CORS(app, supports_credentials=True)
+
+# Oturum çerezi ayarları
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = False
 
 # PostgreSQL bağlantısı
 conn, cursor = connect_to_db()
@@ -91,8 +96,12 @@ def google_login():
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
-    email = data['email']
-    password = data['password']
+    print("Gelen login JSON:", data)  # DEBUG
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"error": "Eksik bilgi"}), 400
 
     cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
     user = cursor.fetchone()
@@ -103,8 +112,7 @@ def login():
         return jsonify({"message": "Login successful"}), 200
     return jsonify({"error": "Invalid email or password"}), 401
 
-@app.route('/logout')
-@login_required
+@app.route('/logout', methods=['GET'])
 def logout():
     logout_user()
     session.pop("user", None)
@@ -181,24 +189,24 @@ def upload_photo():
 
         output_folder = os.path.join(temp_folder, "processed")
         results, processed_images = analyze_and_draw_faces(temp_folder, output_folder)
-
-        report = group_faces_and_generate_report(results)
+        report = group_faces_and_generate_report(results)  # <-- raporu al
 
         analysis_results = []
         for result in results:
             image_name = result.get('image')
             event_image_id = image_id_map.get(image_name)
+            # DB'ye kaydet
             cursor.execute("""
-                INSERT INTO face_analysis_results (event_image_id, age, gender, race, embedding, created_at)
-                VALUES (%s, %s, %s, %s, %s, NOW())
+                INSERT INTO face_analysis_results (event_image_id, age, gender, race, emotion)
+                VALUES (%s, %s, %s, %s, %s)
             """, (
                 event_image_id,
                 result.get('age'),
                 result.get('gender'),
                 result.get('race'),
-                str(result.get('embedding'))
+                result.get('emotion')
             ))
-            conn.commit()
+            # Response için ekle
             analysis_results.append({
                 "event_image_id": event_image_id,
                 "image": image_name,
@@ -207,9 +215,11 @@ def upload_photo():
                 "race": result.get('race'),
                 "emotion": result.get('emotion')
             })
+        conn.commit()
 
         shutil.rmtree(temp_folder)
 
+        # RAPORU DA DÖN!
         return jsonify({
             "event_id": event_id,
             "analysis_results": analysis_results,
@@ -240,7 +250,11 @@ def get_event_details(event_id):
             """, (event_image_id,))
             faces = cursor.fetchall()
             for face in faces:
-                age, gender, race, emotion = face
+                if len(face) == 4:
+                    age, gender, race, emotion = face
+                else:
+                    age, gender, race = face
+                    emotion = None
                 results.append({
                     "event_image_id": event_image_id,
                     "image": image_path,
@@ -250,18 +264,88 @@ def get_event_details(event_id):
                     "emotion": emotion
                 })
 
+        report = group_faces_and_generate_report(results)
+
         return jsonify({
-            "event_details": {
-                "id": event[0],
-                "event_name": event[1],
-                "event_date": event[2],
-                "description": event[3],
-                "results": results
-            }
+            "id": event[0],
+            "event_name": event[1],
+            "event_date": event[2],
+            "description": event[3],
+            "results": results,
+            "report": report
         }), 200
     except Exception as e:
+        conn.rollback()
         print(traceback.format_exc())
         return jsonify({"error": "Failed to fetch event details"}), 500
+
+# app.py içine ekle
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.json
+    username = data.get("username")
+    email = data.get("email")
+    password = data.get("password")
+
+    if not username or not email or not password:
+        return jsonify({"error": "Eksik bilgi"}), 400
+
+    cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+    if cursor.fetchone():
+        return jsonify({"error": "Bu email zaten kayıtlı"}), 409
+
+    hashed_pw = generate_password_hash(password)
+    cursor.execute(
+        "INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)",
+        (username, email, hashed_pw)
+    )
+    conn.commit()
+    return jsonify({"message": "Kayıt başarılı"}), 200
+
+@app.route('/events', methods=['GET'])
+def get_events():
+    try:
+        user_email = session.get("user")
+        if not user_email:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        cursor.execute("SELECT id FROM users WHERE email = %s", (user_email,))
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({"error": "User not found"}), 403
+        user_id = user[0]
+
+        cursor.execute("""
+            SELECT id, event_name, event_date, description
+            FROM events
+            WHERE user_id = %s
+            ORDER BY event_date DESC
+        """, (user_id,))
+        events = cursor.fetchall()
+        event_list = [
+            {
+                "id": e[0],
+                "event_name": e[1],
+                "event_date": e[2],
+                "description": e[3]
+            }
+            for e in events
+        ]
+        return jsonify({"events": event_list}), 200
+    except Exception as e:
+        print(e)
+        return jsonify({"error": "Failed to fetch events"}), 500
+
+# face_analysis_results tablosuna emotion sütunu ekle
+try:
+    cursor.execute("""
+        ALTER TABLE face_analysis_results
+        ADD COLUMN emotion VARCHAR(64)
+    """)
+    conn.commit()
+except Exception as e:
+    conn.rollback()
+    print(f"Error adding column to face_analysis_results: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True)
