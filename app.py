@@ -9,6 +9,7 @@ import os
 import shutil
 import traceback
 import json
+import zipfile
 from db import connect_to_db
 from face_analysis import analyze_and_draw_faces, group_faces_and_generate_report
 
@@ -175,27 +176,51 @@ def upload_photo():
         os.makedirs(temp_folder, exist_ok=True)
 
         image_id_map = {}
+
         for file in files:
-            file_path = os.path.join(temp_folder, file.filename)
-            file.save(file_path)
-            # Her dosya için event_images tablosuna kayıt ekle
-            cursor.execute("""
-                INSERT INTO event_images (event_id, image_path)
-                VALUES (%s, %s) RETURNING id
-            """, (event_id, file.filename))
-            event_image_id = cursor.fetchone()[0]
-            conn.commit()
-            image_id_map[file.filename] = event_image_id
+            if file.filename.endswith('.zip'):
+                # Zip dosyasını aç
+                zip_path = os.path.join(temp_folder, file.filename)
+                file.save(zip_path)
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    for zip_info in zip_ref.infolist():
+                        # Sadece resim dosyalarını al (.jpg, .jpeg, .png)
+                        if zip_info.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                            # Sadece dosya adını kullan, alt klasörleri yok say
+                            zip_info.filename = os.path.basename(zip_info.filename)
+                            extracted_path = zip_ref.extract(zip_info, temp_folder)
+                            cursor.execute("""
+                                INSERT INTO event_images (event_id, image_path)
+                                VALUES (%s, %s) RETURNING id
+                            """, (event_id, os.path.basename(extracted_path)))
+                            event_image_id = cursor.fetchone()[0]
+                            conn.commit()
+                            image_id_map[os.path.basename(extracted_path)] = event_image_id
+                        # Uygun olmayan dosyaları atla
+            else:
+                # Tekil resim dosyası ise
+                if file.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    file_path = os.path.join(temp_folder, file.filename)
+                    file.save(file_path)
+                    cursor.execute("""
+                        INSERT INTO event_images (event_id, image_path)
+                        VALUES (%s, %s) RETURNING id
+                    """, (event_id, file.filename))
+                    event_image_id = cursor.fetchone()[0]
+                    conn.commit()
+                    image_id_map[file.filename] = event_image_id
+                # Uygun olmayan dosyaları atla
 
         output_folder = os.path.join(temp_folder, "processed")
         results, processed_images = analyze_and_draw_faces(temp_folder, output_folder)
-        report = group_faces_and_generate_report(results)  # <-- raporu al
+        report = group_faces_and_generate_report(results)
 
         analysis_results = []
         for result in results:
             image_name = result.get('image')
             event_image_id = image_id_map.get(image_name)
-            # DB'ye kaydet
+            if not event_image_id:
+                continue  # Eşleşmeyen dosyaları atla
             cursor.execute("""
                 INSERT INTO face_analysis_results (event_image_id, age, gender, race, emotion)
                 VALUES (%s, %s, %s, %s, %s)
@@ -206,7 +231,6 @@ def upload_photo():
                 result.get('race'),
                 result.get('emotion')
             ))
-            # Response için ekle
             analysis_results.append({
                 "event_image_id": event_image_id,
                 "image": image_name,
@@ -219,7 +243,6 @@ def upload_photo():
 
         shutil.rmtree(temp_folder)
 
-        # RAPORU DA DÖN!
         return jsonify({
             "event_id": event_id,
             "analysis_results": analysis_results,
@@ -335,6 +358,27 @@ def get_events():
     except Exception as e:
         print(e)
         return jsonify({"error": "Failed to fetch events"}), 500
+
+@app.route('/events/<int:event_id>', methods=['DELETE'])
+def delete_event(event_id):
+    try:
+        # Önce etkinliğe ait yüz analiz sonuçlarını sil
+        cursor.execute("""
+            DELETE FROM face_analysis_results
+            WHERE event_image_id IN (
+                SELECT id FROM event_images WHERE event_id = %s
+            )
+        """, (event_id,))
+        # Sonra etkinliğe ait resimleri sil
+        cursor.execute("DELETE FROM event_images WHERE event_id = %s", (event_id,))
+        # Son olarak etkinliği sil
+        cursor.execute("DELETE FROM events WHERE id = %s", (event_id,))
+        conn.commit()
+        return jsonify({"message": "Etkinlik silindi"}), 200
+    except Exception as e:
+        conn.rollback()
+        print("Etkinlik silinirken hata:", e)
+        return jsonify({"error": "Etkinlik silinemedi"}), 500
 
 # face_analysis_results tablosuna emotion sütunu ekle
 try:
