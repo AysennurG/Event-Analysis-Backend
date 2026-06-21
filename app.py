@@ -10,8 +10,32 @@ import shutil
 import traceback
 import json
 import zipfile
+import requests as http_requests
 from db import connect_to_db
 from face_analysis import analyze_and_draw_faces, group_faces_and_generate_report
+
+
+def call_hf_space(image_folder, hf_url):
+    results = []
+    for filename in os.listdir(image_folder):
+        if not filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+            continue
+        img_path = os.path.join(image_folder, filename)
+        with open(img_path, 'rb') as f:
+            try:
+                resp = http_requests.post(
+                    f"{hf_url}/analyze",
+                    files={"image": (filename, f, "image/jpeg")},
+                    timeout=120
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for face in data.get("faces", []):
+                        face["image"] = filename
+                        results.append(face)
+            except Exception as e:
+                print(f"HF Space error for {filename}: {e}")
+    return results
 
 # .env dosyasını yükle
 load_dotenv()
@@ -23,7 +47,7 @@ CORS(app, supports_credentials=True)
 
 # Oturum çerezi ayarları
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = False
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV") == "production"
 
 # PostgreSQL bağlantısı
 conn, cursor = connect_to_db()
@@ -90,7 +114,7 @@ def google_login():
 
         # Kullanıcı oturumunu işaretle
         session["user"] = email
-        return redirect("http://127.0.0.1:3000/")  # Frontend ana sayfasına yönlendir
+        return redirect(os.getenv("FRONTEND_URL", "http://127.0.0.1:3000") + "/")
     except Exception as e:
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
@@ -212,7 +236,12 @@ def upload_photo():
                 # Uygun olmayan dosyaları atla
 
         output_folder = os.path.join(temp_folder, "processed")
-        results, processed_images = analyze_and_draw_faces(temp_folder, output_folder)
+        hf_url = os.getenv("HF_SPACE_URL")
+        if hf_url:
+            results = call_hf_space(temp_folder, hf_url)
+            processed_images = []
+        else:
+            results, processed_images = analyze_and_draw_faces(temp_folder, output_folder)
         report = group_faces_and_generate_report(results)
 
         analysis_results = []
