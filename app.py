@@ -44,6 +44,12 @@ def make_report(results):
 
 
 def call_hf_space(image_folder, hf_url):
+    # HF Space'i uyandır
+    try:
+        http_requests.get(f"{hf_url}/health", timeout=30)
+    except Exception:
+        pass
+
     results = []
     for filename in os.listdir(image_folder):
         if not filename.lower().endswith(('.jpg', '.jpeg', '.png')):
