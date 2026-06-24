@@ -79,7 +79,7 @@ google_blueprint = make_google_blueprint(
     scope=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
     redirect_to="google_login"
 )
-app.register_blueprint(google_blueprint, url_prefix="/auth/google")
+app.register_blueprint(google_blueprint, url_prefix="/auth")
 
 @app.route('/auth/google/callback')
 def google_login():
