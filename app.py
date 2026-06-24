@@ -54,6 +54,55 @@ app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV") == "production"
 # PostgreSQL bağlantısı
 conn, cursor = connect_to_db()
 
+# Tabloları oluştur
+if conn and cursor:
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(255),
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255),
+                google_id VARCHAR(255) UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id SERIAL PRIMARY KEY,
+                user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                event_name VARCHAR(255) NOT NULL,
+                event_date TIMESTAMP NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS event_images (
+                id SERIAL PRIMARY KEY,
+                event_id INT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                image_path VARCHAR(255) NOT NULL,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS face_analysis_results (
+                id SERIAL PRIMARY KEY,
+                event_image_id INT NOT NULL REFERENCES event_images(id) ON DELETE CASCADE,
+                age INT,
+                gender VARCHAR(50),
+                race VARCHAR(50),
+                emotion VARCHAR(64),
+                embedding JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+        print("Tables created successfully")
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating tables: {str(e)}")
+
 def get_db():
     global conn, cursor
     try:
