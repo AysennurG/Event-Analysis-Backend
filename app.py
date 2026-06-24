@@ -109,10 +109,17 @@ if conn and cursor:
 def get_db():
     global conn, cursor
     try:
-        conn.cursor()
+        if conn is None or conn.closed:
+            raise Exception("Connection closed")
+        conn.cursor().execute("SELECT 1")
     except Exception:
         conn, cursor = connect_to_db()
     return conn, cursor
+
+@app.before_request
+def refresh_db():
+    global conn, cursor
+    conn, cursor = get_db()
 
 # Flask-Login ayarları
 login_manager = LoginManager()
