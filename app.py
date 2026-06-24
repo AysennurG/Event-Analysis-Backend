@@ -77,15 +77,16 @@ google_blueprint = make_google_blueprint(
     client_id=os.getenv("GOOGLE_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
     scope=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
-    redirect_to="google_login"
+    redirect_to="google_login",
+    redirect_url="/auth/google/callback"
 )
 app.register_blueprint(google_blueprint, url_prefix="/auth")
 
-@app.route('/auth/google/authorized')
+@app.route('/auth/google/callback')
 def google_login():
     try:
         if not google.authorized:
-            return redirect(url_for("google.login"))
+            return jsonify({"error": "Not authorized"}), 401
 
         # Google'dan kullanıcı bilgilerini al
         resp = google.get("/oauth2/v2/userinfo")
