@@ -12,7 +12,9 @@ import json
 import zipfile
 import requests as http_requests
 from db import connect_to_db
-from face_analysis import analyze_and_draw_faces, group_faces_and_generate_report
+
+if not os.getenv("HF_SPACE_URL"):
+    from face_analysis import analyze_and_draw_faces, group_faces_and_generate_report
 
 
 def call_hf_space(image_folder, hf_url):
