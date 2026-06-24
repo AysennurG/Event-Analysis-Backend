@@ -45,11 +45,14 @@ load_dotenv()
 # Flask uygulaması
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
-CORS(app, supports_credentials=True)
+
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+CORS(app, supports_credentials=True, origins=[frontend_url])
 
 # Oturum çerezi ayarları
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV") == "production"
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_DOMAIN"] = None
 
 # PostgreSQL bağlantısı
 conn, cursor = connect_to_db()
