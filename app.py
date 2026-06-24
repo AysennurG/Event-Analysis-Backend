@@ -1,14 +1,14 @@
 from flask import Flask, request, jsonify, redirect, url_for, session
 from flask_cors import CORS
-from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required
+from flask_login import LoginManager, UserMixin, login_user, logout_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_dance.contrib.google import make_google_blueprint, google
 from dotenv import load_dotenv
+from collections import Counter
 import psycopg2
 import os
 import shutil
 import traceback
-import json
 import zipfile
 import requests as http_requests
 from db import connect_to_db
@@ -18,7 +18,6 @@ if not os.getenv("HF_SPACE_URL"):
 
 
 def _generate_report(results):
-    from collections import Counter
     if not results:
         return {}
     genders = Counter(r.get("gender") for r in results if r.get("gender"))
@@ -35,6 +34,14 @@ def _generate_report(results):
         "average_age": round(sum(ages) / len(ages), 1) if ages else 0,
         "memnuniyet_orani_%": satisfaction
     }
+
+
+def make_report(results):
+    hf_url = os.getenv("HF_SPACE_URL")
+    if hf_url:
+        return _generate_report(results)
+    return group_faces_and_generate_report(results)
+
 
 def call_hf_space(image_folder, hf_url):
     results = []
@@ -58,17 +65,15 @@ def call_hf_space(image_folder, hf_url):
                 print(f"HF Space error for {filename}: {e}")
     return results
 
-# .env dosyasını yükle
+
 load_dotenv()
 
-# Flask uygulaması
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
 CORS(app, supports_credentials=True, origins=[frontend_url])
 
-# Oturum çerezi ayarları
 app.config["SESSION_COOKIE_SAMESITE"] = "None"
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_DOMAIN"] = None
@@ -120,29 +125,32 @@ if conn and cursor:
             );
         """)
         conn.commit()
-        print("Tables created successfully")
+        print("Tables ready")
     except Exception as e:
         conn.rollback()
         print(f"Error creating tables: {str(e)}")
+
 
 def get_db():
     global conn, cursor
     try:
         if conn is None or conn.closed:
-            raise Exception("Connection closed")
+            raise Exception("closed")
         conn.cursor().execute("SELECT 1")
     except Exception:
         conn, cursor = connect_to_db()
     return conn, cursor
+
 
 @app.before_request
 def refresh_db():
     global conn, cursor
     conn, cursor = get_db()
 
-# Flask-Login ayarları
+
 login_manager = LoginManager()
 login_manager.init_app(app)
+
 
 class User(UserMixin):
     def __init__(self, id, username, email):
@@ -150,15 +158,19 @@ class User(UserMixin):
         self.username = username
         self.email = email
 
+
 @login_manager.user_loader
 def load_user(user_id):
-    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-    user = cursor.fetchone()
-    if user:
-        return User(user[0], user[1], user[2])
+    try:
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        if user:
+            return User(user[0], user[1], user[2])
+    except Exception:
+        pass
     return None
 
-# Google OAuth yapılandırması
+
 google_blueprint = make_google_blueprint(
     client_id=os.getenv("GOOGLE_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
@@ -168,13 +180,13 @@ google_blueprint = make_google_blueprint(
 )
 app.register_blueprint(google_blueprint, url_prefix="/auth")
 
+
 @app.route('/auth/google/callback')
 def google_login():
     try:
         if not google.authorized:
             return jsonify({"error": "Not authorized"}), 401
 
-        # Google'dan kullanıcı bilgilerini al
         resp = google.get("/oauth2/v2/userinfo")
         if not resp.ok:
             return jsonify({"error": "Failed to fetch user info from Google"}), 500
@@ -187,31 +199,25 @@ def google_login():
         if not email or not google_id:
             return jsonify({"error": "Invalid user info from Google"}), 500
 
-        # Kullanıcıyı veritabanında kontrol et veya kaydet
         conn, cursor = get_db()
         cursor.execute("SELECT * FROM users WHERE email = %s OR google_id = %s", (email, google_id))
         user = cursor.fetchone()
         if not user:
-            try:
-                cursor.execute(
-                    "INSERT INTO users (username, email, google_id) VALUES (%s, %s, %s)",
-                    (username, email, google_id)
-                )
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                return jsonify({"error": f"Database error: {str(e)}"}), 500
+            cursor.execute(
+                "INSERT INTO users (username, email, google_id) VALUES (%s, %s, %s)",
+                (username, email, google_id)
+            )
+            conn.commit()
 
-        # Kullanıcı oturumunu işaretle
         session["user"] = email
-        return redirect(os.getenv("FRONTEND_URL", "http://127.0.0.1:3000") + "/")
+        return redirect(os.getenv("FRONTEND_URL", "http://localhost:3000") + "/")
     except Exception as e:
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
 
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
-    print("Gelen login JSON:", data)  # DEBUG
     email = data.get('email')
     password = data.get('password')
 
@@ -220,12 +226,13 @@ def login():
 
     cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
     user = cursor.fetchone()
-    if user and check_password_hash(user[3], password):  # Şifre doğrulama
+    if user and user[3] and check_password_hash(user[3], password):
         user_obj = User(user[0], user[1], user[2])
         login_user(user_obj)
         session["user"] = email
         return jsonify({"message": "Login successful"}), 200
     return jsonify({"error": "Invalid email or password"}), 401
+
 
 @app.route('/logout', methods=['GET'])
 def logout():
@@ -233,27 +240,30 @@ def logout():
     session.pop("user", None)
     return jsonify({"message": "Logged out successfully"}), 200
 
+
 @app.route('/auth/check', methods=['GET'])
 def auth_check():
     if "user" in session:
-        cursor.execute("SELECT id, username, email FROM users WHERE email = %s", (session["user"],))
-        user = cursor.fetchone()
-        if user:
-            return jsonify({"authenticated": True, "user": {"id": user[0], "username": user[1], "email": user[2]}}), 200
+        try:
+            cursor.execute("SELECT id, username, email FROM users WHERE email = %s", (session["user"],))
+            user = cursor.fetchone()
+            if user:
+                return jsonify({"authenticated": True, "user": {"id": user[0], "username": user[1], "email": user[2]}}), 200
+        except Exception:
+            pass
     return jsonify({"authenticated": False}), 401
+
 
 @app.route('/print_results', methods=['POST'])
 def print_results():
     try:
         results = request.json.get("results", [])
-        print("\n--- Analiz Sonuçları (Butona Tıklanınca) ---")
         for result in results:
             print(f"Resim: {result.get('image')} | Yaş: {result.get('age')} | Cinsiyet: {result.get('gender')} | Irk: {result.get('race')}")
-        print("--- Son ---\n")
         return jsonify({"message": "Sonuçlar terminale yazdırıldı."}), 200
     except Exception as e:
-        print("Sonuçları terminale yazdırırken hata:", e)
         return jsonify({"error": "Terminale yazdırılamadı."}), 500
+
 
 @app.route('/upload', methods=['POST'])
 def upload_photo():
@@ -293,14 +303,11 @@ def upload_photo():
 
         for file in files:
             if file.filename.endswith('.zip'):
-                # Zip dosyasını aç
                 zip_path = os.path.join(temp_folder, file.filename)
                 file.save(zip_path)
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     for zip_info in zip_ref.infolist():
-                        # Sadece resim dosyalarını al (.jpg, .jpeg, .png)
                         if zip_info.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                            # Sadece dosya adını kullan, alt klasörleri yok say
                             zip_info.filename = os.path.basename(zip_info.filename)
                             extracted_path = zip_ref.extract(zip_info, temp_folder)
                             cursor.execute("""
@@ -310,9 +317,7 @@ def upload_photo():
                             event_image_id = cursor.fetchone()[0]
                             conn.commit()
                             image_id_map[os.path.basename(extracted_path)] = event_image_id
-                        # Uygun olmayan dosyaları atla
             else:
-                # Tekil resim dosyası ise
                 if file.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
                     file_path = os.path.join(temp_folder, file.filename)
                     file.save(file_path)
@@ -323,24 +328,22 @@ def upload_photo():
                     event_image_id = cursor.fetchone()[0]
                     conn.commit()
                     image_id_map[file.filename] = event_image_id
-                # Uygun olmayan dosyaları atla
 
-        output_folder = os.path.join(temp_folder, "processed")
         hf_url = os.getenv("HF_SPACE_URL")
         if hf_url:
             results = call_hf_space(temp_folder, hf_url)
-            processed_images = []
-            report = _generate_report(results)
         else:
-            results, processed_images = analyze_and_draw_faces(temp_folder, output_folder)
-            report = group_faces_and_generate_report(results)
+            output_folder = os.path.join(temp_folder, "processed")
+            results, _ = analyze_and_draw_faces(temp_folder, output_folder)
+
+        report = make_report(results)
 
         analysis_results = []
         for result in results:
             image_name = result.get('image')
             event_image_id = image_id_map.get(image_name)
             if not event_image_id:
-                continue  # Eşleşmeyen dosyaları atla
+                continue
             cursor.execute("""
                 INSERT INTO face_analysis_results (event_image_id, age, gender, race, emotion)
                 VALUES (%s, %s, %s, %s, %s)
@@ -361,7 +364,7 @@ def upload_photo():
             })
         conn.commit()
 
-        shutil.rmtree(temp_folder)
+        shutil.rmtree(temp_folder, ignore_errors=True)
 
         return jsonify({
             "event_id": event_id,
@@ -369,9 +372,13 @@ def upload_photo():
             "report": report
         }), 200
     except Exception as e:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         print(traceback.format_exc())
         return jsonify({"error": f"Failed to upload photo: {str(e)}"}), 500
+
 
 @app.route('/event/<int:event_id>', methods=['GET'])
 def get_event_details(event_id):
@@ -393,11 +400,7 @@ def get_event_details(event_id):
             """, (event_image_id,))
             faces = cursor.fetchall()
             for face in faces:
-                if len(face) == 4:
-                    age, gender, race, emotion = face
-                else:
-                    age, gender, race = face
-                    emotion = None
+                age, gender, race, emotion = face[0], face[1], face[2], face[3] if len(face) > 3 else None
                 results.append({
                     "event_image_id": event_image_id,
                     "image": image_path,
@@ -407,7 +410,7 @@ def get_event_details(event_id):
                     "emotion": emotion
                 })
 
-        report = group_faces_and_generate_report(results)
+        report = make_report(results)
 
         return jsonify({
             "id": event[0],
@@ -418,11 +421,14 @@ def get_event_details(event_id):
             "report": report
         }), 200
     except Exception as e:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         print(traceback.format_exc())
         return jsonify({"error": "Failed to fetch event details"}), 500
 
-# app.py içine ekle
+
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -444,6 +450,7 @@ def register():
     )
     conn.commit()
     return jsonify({"message": "Kayıt başarılı"}), 200
+
 
 @app.route('/events', methods=['GET'])
 def get_events():
@@ -479,38 +486,28 @@ def get_events():
         print(e)
         return jsonify({"error": "Failed to fetch events"}), 500
 
+
 @app.route('/events/<int:event_id>', methods=['DELETE'])
 def delete_event(event_id):
     try:
-        # Önce etkinliğe ait yüz analiz sonuçlarını sil
         cursor.execute("""
             DELETE FROM face_analysis_results
             WHERE event_image_id IN (
                 SELECT id FROM event_images WHERE event_id = %s
             )
         """, (event_id,))
-        # Sonra etkinliğe ait resimleri sil
         cursor.execute("DELETE FROM event_images WHERE event_id = %s", (event_id,))
-        # Son olarak etkinliği sil
         cursor.execute("DELETE FROM events WHERE id = %s", (event_id,))
         conn.commit()
         return jsonify({"message": "Etkinlik silindi"}), 200
     except Exception as e:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         print("Etkinlik silinirken hata:", e)
         return jsonify({"error": "Etkinlik silinemedi"}), 500
 
-# face_analysis_results tablosuna emotion sütunu ekle
-if conn and cursor:
-    try:
-        cursor.execute("""
-            ALTER TABLE face_analysis_results
-            ADD COLUMN emotion VARCHAR(64)
-        """)
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print(f"Error adding column to face_analysis_results: {str(e)}")
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
