@@ -17,6 +17,25 @@ if not os.getenv("HF_SPACE_URL"):
     from face_analysis import analyze_and_draw_faces, group_faces_and_generate_report
 
 
+def _generate_report(results):
+    from collections import Counter
+    if not results:
+        return {}
+    genders = Counter(r.get("gender") for r in results if r.get("gender"))
+    races = Counter(r.get("race") for r in results if r.get("race"))
+    emotions = Counter(r.get("emotion") for r in results if r.get("emotion"))
+    ages = [r.get("age") for r in results if r.get("age")]
+    happy = emotions.get("happy", 0) + emotions.get("surprise", 0)
+    satisfaction = round(happy / len(results) * 100, 1) if results else 0
+    return {
+        "total_faces": len(results),
+        "gender_distribution": dict(genders),
+        "race_distribution": dict(races),
+        "emotion_distribution": dict(emotions),
+        "average_age": round(sum(ages) / len(ages), 1) if ages else 0,
+        "memnuniyet_orani_%": satisfaction
+    }
+
 def call_hf_space(image_folder, hf_url):
     results = []
     for filename in os.listdir(image_folder):
@@ -311,9 +330,10 @@ def upload_photo():
         if hf_url:
             results = call_hf_space(temp_folder, hf_url)
             processed_images = []
+            report = _generate_report(results)
         else:
             results, processed_images = analyze_and_draw_faces(temp_folder, output_folder)
-        report = group_faces_and_generate_report(results)
+            report = group_faces_and_generate_report(results)
 
         analysis_results = []
         for result in results:
