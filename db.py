@@ -6,7 +6,7 @@ def connect_to_db():
     try:
         database_url = os.getenv("DATABASE_URL")
         if database_url:
-            conn = psycopg2.connect(database_url, sslmode="require")
+            conn = psycopg2.connect(database_url)
         else:
             conn = psycopg2.connect(
                 dbname=os.getenv("DB_NAME"),
