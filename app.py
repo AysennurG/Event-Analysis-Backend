@@ -81,7 +81,7 @@ google_blueprint = make_google_blueprint(
 )
 app.register_blueprint(google_blueprint, url_prefix="/auth")
 
-@app.route('/auth/google/callback')
+@app.route('/auth/google/authorized')
 def google_login():
     try:
         if not google.authorized:
