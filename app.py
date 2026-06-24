@@ -412,15 +412,16 @@ def delete_event(event_id):
         return jsonify({"error": "Etkinlik silinemedi"}), 500
 
 # face_analysis_results tablosuna emotion sütunu ekle
-try:
-    cursor.execute("""
-        ALTER TABLE face_analysis_results
-        ADD COLUMN emotion VARCHAR(64)
-    """)
-    conn.commit()
-except Exception as e:
-    conn.rollback()
-    print(f"Error adding column to face_analysis_results: {str(e)}")
+if conn and cursor:
+    try:
+        cursor.execute("""
+            ALTER TABLE face_analysis_results
+            ADD COLUMN emotion VARCHAR(64)
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error adding column to face_analysis_results: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True)
