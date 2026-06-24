@@ -54,6 +54,14 @@ app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV") == "production"
 # PostgreSQL bağlantısı
 conn, cursor = connect_to_db()
 
+def get_db():
+    global conn, cursor
+    try:
+        conn.cursor()
+    except Exception:
+        conn, cursor = connect_to_db()
+    return conn, cursor
+
 # Flask-Login ayarları
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -102,6 +110,7 @@ def google_login():
             return jsonify({"error": "Invalid user info from Google"}), 500
 
         # Kullanıcıyı veritabanında kontrol et veya kaydet
+        conn, cursor = get_db()
         cursor.execute("SELECT * FROM users WHERE email = %s OR google_id = %s", (email, google_id))
         user = cursor.fetchone()
         if not user:
