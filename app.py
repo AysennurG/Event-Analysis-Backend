@@ -11,6 +11,7 @@ import shutil
 import traceback
 import zipfile
 import requests as http_requests
+import threading
 from db import connect_to_db
 
 if not os.getenv("HF_SPACE_URL"):
@@ -338,49 +339,60 @@ def upload_photo():
                     conn.commit()
                     image_id_map[file.filename] = event_image_id
 
-        hf_url = os.getenv("HF_SPACE_URL")
-        if hf_url:
-            results = call_hf_space(temp_folder, hf_url)
-        else:
-            output_folder = os.path.join(temp_folder, "processed")
-            results, _ = analyze_and_draw_faces(temp_folder, output_folder)
+        def run_analysis(temp_folder, image_id_map, event_id):
+            try:
+                bg_conn, bg_cursor = connect_to_db()
+                if not bg_conn:
+                    print("Background DB connection failed")
+                    return
 
-        print(f"Total results from HF: {len(results)}")
-        print(f"image_id_map keys: {list(image_id_map.keys())}")
-        report = make_report(results)
+                hf_url = os.getenv("HF_SPACE_URL")
+                if hf_url:
+                    results = call_hf_space(temp_folder, hf_url)
+                else:
+                    output_folder = os.path.join(temp_folder, "processed")
+                    results, _ = analyze_and_draw_faces(temp_folder, output_folder)
 
-        analysis_results = []
-        for result in results:
-            image_name = result.get('image')
-            event_image_id = image_id_map.get(image_name)
-            if not event_image_id:
-                continue
-            cursor.execute("""
-                INSERT INTO face_analysis_results (event_image_id, age, gender, race, emotion)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (
-                event_image_id,
-                result.get('age'),
-                result.get('gender'),
-                result.get('race'),
-                result.get('emotion')
-            ))
-            analysis_results.append({
-                "event_image_id": event_image_id,
-                "image": image_name,
-                "age": result.get('age'),
-                "gender": result.get('gender'),
-                "race": result.get('race'),
-                "emotion": result.get('emotion')
-            })
-        conn.commit()
+                print(f"Background analysis done. Results: {len(results)}")
+                print(f"image_id_map keys: {list(image_id_map.keys())}")
 
-        shutil.rmtree(temp_folder, ignore_errors=True)
+                for result in results:
+                    image_name = result.get('image')
+                    event_image_id = image_id_map.get(image_name)
+                    if not event_image_id:
+                        print(f"No match for image: {image_name}")
+                        continue
+                    bg_cursor.execute("""
+                        INSERT INTO face_analysis_results (event_image_id, age, gender, race, emotion)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        event_image_id,
+                        result.get('age'),
+                        result.get('gender'),
+                        result.get('race'),
+                        result.get('emotion')
+                    ))
+                bg_conn.commit()
+                print(f"Analysis saved for event {event_id}")
+            except Exception as e:
+                print(f"Background analysis error: {e}")
+                print(traceback.format_exc())
+            finally:
+                shutil.rmtree(temp_folder, ignore_errors=True)
+                try:
+                    bg_conn.close()
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=run_analysis, args=(temp_folder, image_id_map, event_id))
+        thread.daemon = True
+        thread.start()
 
         return jsonify({
             "event_id": event_id,
-            "analysis_results": analysis_results,
-            "report": report
+            "analysis_results": [],
+            "report": {},
+            "status": "processing"
         }), 200
     except Exception as e:
         try:
