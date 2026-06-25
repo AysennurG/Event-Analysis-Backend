@@ -64,9 +64,12 @@ def call_hf_space(image_folder, hf_url):
                 )
                 if resp.status_code == 200:
                     data = resp.json()
+                    print(f"HF response for {filename}: {data}")
                     for face in data.get("faces", []):
                         face["image"] = filename
                         results.append(face)
+                else:
+                    print(f"HF error {resp.status_code} for {filename}: {resp.text}")
             except Exception as e:
                 print(f"HF Space error for {filename}: {e}")
     return results
@@ -342,6 +345,8 @@ def upload_photo():
             output_folder = os.path.join(temp_folder, "processed")
             results, _ = analyze_and_draw_faces(temp_folder, output_folder)
 
+        print(f"Total results from HF: {len(results)}")
+        print(f"image_id_map keys: {list(image_id_map.keys())}")
         report = make_report(results)
 
         analysis_results = []
