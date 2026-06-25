@@ -442,7 +442,7 @@ def get_event_details(event_id):
         return jsonify({
             "id": event[0],
             "event_name": event[1],
-            "event_date": event[2],
+            "event_date": str(event[2]),
             "description": event[3],
             "results": results,
             "report": report
@@ -503,7 +503,7 @@ def get_events():
             {
                 "id": e[0],
                 "event_name": e[1],
-                "event_date": e[2],
+                "event_date": str(e[2]),
                 "description": e[3]
             }
             for e in events
