@@ -24,15 +24,15 @@ def _generate_report(results):
     genders = Counter(r.get("gender") for r in results if r.get("gender"))
     races = Counter(r.get("race") for r in results if r.get("race"))
     emotions = Counter(r.get("emotion") for r in results if r.get("emotion"))
-    ages = [r.get("age") for r in results if r.get("age")]
+    ages = Counter(str(r.get("age")) for r in results if r.get("age"))
     happy = emotions.get("happy", 0) + emotions.get("surprise", 0)
     satisfaction = round(happy / len(results) * 100, 1) if results else 0
     return {
-        "total_faces": len(results),
+        "crowd_size": len(results),
         "gender_distribution": dict(genders),
         "race_distribution": dict(races),
         "emotion_distribution": dict(emotions),
-        "average_age": round(sum(ages) / len(ages), 1) if ages else 0,
+        "age_distribution": dict(ages),
         "memnuniyet_orani_%": satisfaction
     }
 
