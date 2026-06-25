@@ -82,19 +82,11 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
-def cors_origin_check(origin):
-    if not origin:
-        return False
-    allowed = [frontend_url, "http://localhost:3000"]
-    if origin in allowed:
-        return True
-    # Vercel preview URL'lerini de kabul et
-    if origin.endswith(".vercel.app"):
-        return True
-    return False
-
-CORS(app, supports_credentials=True, origins=cors_origin_check)
+CORS(app, supports_credentials=True, origins=[
+    frontend_url,
+    "http://localhost:3000",
+    r"https://.*\.vercel\.app",
+])
 
 app.config["SESSION_COOKIE_SAMESITE"] = "None"
 app.config["SESSION_COOKIE_SECURE"] = True
