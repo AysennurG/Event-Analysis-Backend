@@ -82,7 +82,19 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-CORS(app, supports_credentials=True, origins=[frontend_url])
+
+def cors_origin_check(origin):
+    if not origin:
+        return False
+    allowed = [frontend_url, "http://localhost:3000"]
+    if origin in allowed:
+        return True
+    # Vercel preview URL'lerini de kabul et
+    if origin.endswith(".vercel.app"):
+        return True
+    return False
+
+CORS(app, supports_credentials=True, origins=cors_origin_check)
 
 app.config["SESSION_COOKIE_SAMESITE"] = "None"
 app.config["SESSION_COOKIE_SECURE"] = True
@@ -220,7 +232,7 @@ def google_login():
             conn.commit()
 
         session["user"] = email
-        return redirect(os.getenv("FRONTEND_URL", "http://localhost:3000") + "/")
+        return redirect(os.getenv("FRONTEND_URL", "http://localhost:3000") + "/?oauth=success")
     except Exception as e:
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
